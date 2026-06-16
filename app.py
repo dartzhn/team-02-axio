@@ -42,6 +42,14 @@ BUCKET_LABELS = {
     4: "90+ min",
 }
 
+BUCKET_REPRESENTATIVE_MINUTES = {
+    0: 7,
+    1: 22,
+    2: 45,
+    3: 75,
+    4: 105,
+}
+
 
 def risk_level(score: float) -> str:
     if score >= 0.60:
@@ -63,6 +71,51 @@ def minutes(value) -> int:
         return int(round(float(value)))
     except (TypeError, ValueError):
         return 0
+
+
+def delay_range_from_minutes(value) -> str:
+    predicted = minutes(value)
+    if predicted < 15:
+        return "On time"
+    if predicted < 30:
+        return "15-30 min"
+    if predicted < 60:
+        return "30-60 min"
+    if predicted < 90:
+        return "60-90 min"
+    return "90+ min"
+
+
+def probability_value(row: dict, primary: str, fallback: str) -> float:
+    value = row.get(primary)
+    if value is None:
+        value = row.get(fallback)
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def distribution_delay_estimate(row: dict, fallback_minutes: int) -> tuple[int, str]:
+    """Choose a single user-facing delay estimate from the bucket distribution."""
+    probs = [
+        probability_value(row, "reg_prob_on_time", "prob_on_time"),
+        probability_value(row, "reg_prob_15_30_min", "prob_15_30_min"),
+        probability_value(row, "reg_prob_30_60_min", "prob_30_60_min"),
+        probability_value(row, "reg_prob_60_90_min", "prob_60_90_min"),
+        probability_value(row, "reg_prob_90plus_min", "prob_90plus_min"),
+    ]
+    total = sum(probs)
+    if total <= 0:
+        return fallback_minutes, delay_range_from_minutes(fallback_minutes)
+
+    cumulative = 0.0
+    for bucket, prob in enumerate(probs):
+        cumulative += prob / total
+        if cumulative >= 0.5:
+            return BUCKET_REPRESENTATIVE_MINUTES[bucket], BUCKET_LABELS[bucket]
+
+    return BUCKET_REPRESENTATIVE_MINUTES[4], BUCKET_LABELS[4]
 
 
 def as_float(value, default: float = 0.0) -> float:
@@ -117,6 +170,18 @@ def recommend_action(row: dict) -> dict:
             "action": "Pre-alert ramp, cleaning, fueling, catering and baggage teams before aircraft arrival.",
             "reason": "Recovery buffer is too small to absorb inbound delay.",
             "escalation": "Escalate if available turnaround time falls below minimum turnaround threshold.",
+        }
+
+    # Catches any remaining positive carry-over (e.g. large buffer that still
+    # cannot fully absorb a very late inbound aircraft).  Without this branch
+    # such flights would fall through to the weather or pressure checks even
+    # when the inbound delay is the dominant operational driver.
+    if inbound_after > 0:
+        return {
+            "title": "Track inbound carry-over",
+            "action": "Monitor inbound aircraft arrival closely, coordinate early ramp handoff, and alert the gate team to the expected late arrival.",
+            "reason": "Inbound delay is not fully absorbed by the scheduled ground time and will carry over to this departure.",
+            "escalation": "Escalate if the carry-over grows or downstream connections become at risk.",
         }
 
     if weather_score >= 70 or snow or fog or thunderstorm or wind_gust_high:
@@ -412,11 +477,18 @@ def load_scored_rows(limit: int | None = None) -> dict:
         df = df.head(limit)
 
     flights = []
+    display_delay_values = []
     for _, series in df.iterrows():
         row = series.where(pd.notna(series), None).to_dict()
         brief = build_user_brief(row)
         bucket = int(row.get("predicted_delay_bucket") or 0)
         score = float(row.get("delay_risk") or 0)
+        predicted_minutes = minutes(row.get("predicted_delay_min"))
+        display_delay_minutes, display_delay_range = distribution_delay_estimate(
+            row,
+            predicted_minutes,
+        )
+        display_delay_values.append(display_delay_minutes)
         flight = {
             "flight_id": row.get("flight_id"),
             "date": row.get("date"),
@@ -426,7 +498,9 @@ def load_scored_rows(limit: int | None = None) -> dict:
             "route": f"{row.get('origin')} -> {row.get('dest')}",
             "sched_dep_local": row.get("sched_dep_local"),
             "dep_hour": row.get("dep_hour"),
-            "predicted_delay_min": minutes(row.get("predicted_delay_min")),
+            "predicted_delay_min": display_delay_minutes,
+            "predicted_delay_range_label": display_delay_range,
+            "regression_mean_delay_min": predicted_minutes,
             "predicted_delay_bucket": bucket,
             "predicted_delay_bucket_label": BUCKET_LABELS.get(bucket, "Unknown"),
             "actual_delay_bucket": row.get("actual_delay_bucket"),
@@ -435,11 +509,11 @@ def load_scored_rows(limit: int | None = None) -> dict:
             "delay_risk_pct": pct(score),
             "risk_level": risk_level(score),
             "probabilities": {
-                "on_time": float(row.get("prob_on_time") or 0),
-                "delay_15_30": float(row.get("prob_15_30_min") or 0),
-                "delay_30_60": float(row.get("prob_30_60_min") or 0),
-                "delay_60_90": float(row.get("prob_60_90_min") or 0),
-                "delay_90_plus": float(row.get("prob_90plus_min") or 0),
+                "on_time": probability_value(row, "reg_prob_on_time", "prob_on_time"),
+                "delay_15_30": probability_value(row, "reg_prob_15_30_min", "prob_15_30_min"),
+                "delay_30_60": probability_value(row, "reg_prob_30_60_min", "prob_30_60_min"),
+                "delay_60_90": probability_value(row, "reg_prob_60_90_min", "prob_60_90_min"),
+                "delay_90_plus": probability_value(row, "reg_prob_90plus_min", "prob_90plus_min"),
             },
             **brief,
         }
@@ -448,7 +522,7 @@ def load_scored_rows(limit: int | None = None) -> dict:
     full = pd.read_csv(SCORED_PATH, low_memory=False)
     high = int((full["delay_risk"] >= 0.60).sum())
     medium = int(((full["delay_risk"] >= 0.30) & (full["delay_risk"] < 0.60)).sum())
-    avg_delay = float(full["predicted_delay_min"].mean()) if len(full) else 0
+    avg_delay = float(sum(display_delay_values) / len(display_delay_values)) if display_delay_values else 0
     busiest_origin = (
         full["origin"].value_counts().idxmax()
         if "origin" in full and len(full)

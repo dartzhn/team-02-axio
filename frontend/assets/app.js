@@ -53,7 +53,6 @@ const els = {
   suggestionReason: document.querySelector("#suggestionReason"),
   suggestionEscalation: document.querySelector("#suggestionEscalation"),
   reasonList: document.querySelector("#reasonList"),
-  actionList: document.querySelector("#actionList"),
   riskFactorList: document.querySelector("#riskFactorList"),
   probBars: document.querySelector("#probBars"),
 };
@@ -79,6 +78,26 @@ function formatTime(hour) {
   const h = Number(hour);
   if (h >= 23) return "23:59";
   return `${String(h).padStart(2, "0")}:59`;
+}
+
+function predictedDelayText(flight) {
+  const minutes = Number(flight.predicted_delay_min);
+  if (!Number.isFinite(minutes)) return "-";
+  return `${Math.round(minutes)} min`;
+}
+
+function predictedDelayRange(flight) {
+  return flight.predicted_delay_range_label || "Unknown";
+}
+
+function distributionRows(probabilities = {}) {
+  return [
+    ["On time", probabilities.on_time, "on-time"],
+    ["15-30", probabilities.delay_15_30, "short"],
+    ["30-60", probabilities.delay_30_60, "medium"],
+    ["60-90", probabilities.delay_60_90, "long"],
+    ["90+", probabilities.delay_90_plus, "severe"],
+  ];
 }
 
 function fillSelect(select, values, label) {
@@ -169,6 +188,8 @@ function renderTable() {
   els.resultCount.textContent = `${state.filtered.length} flights shown`;
   const rows = state.filtered.map((flight) => {
     const selected = flight.flight_id === state.selectedId ? "selected" : "";
+    const delayText = predictedDelayText(flight);
+    const delayRange = predictedDelayRange(flight);
     return `
       <tr class="${selected}" data-flight-id="${flight.flight_id}">
         <td class="flight-cell">
@@ -185,8 +206,8 @@ function renderTable() {
           <span class="risk-badge ${riskClass(flight.risk_level)}">${flight.risk_level}</span>
         </td>
         <td>
-          <strong>${flight.predicted_delay_min} min</strong>
-          <span class="subtext">${flight.predicted_delay_bucket_label}</span>
+          <strong>${delayText}</strong>
+          <span class="subtext">${delayRange}</span>
         </td>
         <td class="reason-cell">${flight.main_reason}</td>
       </tr>
@@ -246,14 +267,8 @@ function renderSuggestion(suggestion) {
   els.suggestionEscalation.textContent = safeSuggestion.escalation;
 }
 
-function renderProbBars(probabilities) {
-  const rows = [
-    ["On time", probabilities.on_time, "on-time"],
-    ["15-30", probabilities.delay_15_30, "short"],
-    ["30-60", probabilities.delay_30_60, "medium"],
-    ["60-90", probabilities.delay_60_90, "long"],
-    ["90+", probabilities.delay_90_plus, "severe"],
-  ];
+function renderProbBars(flight) {
+  const rows = distributionRows(flight.probabilities || {});
   els.probBars.innerHTML = rows.map(([label, value, tone]) => {
     const width = Math.max(0, Math.min(100, Math.round((Number(value) || 0) * 100)));
     return `
@@ -289,13 +304,12 @@ function renderDetail() {
   els.detailRoute.textContent = `${flight.origin} → ${flight.dest} · ${flight.carrier}`;
   els.detailRisk.textContent = `${flight.delay_risk_pct}%`;
   els.detailTime.textContent = flight.sched_dep_local ?? "-";
-  els.detailDelay.textContent = `${flight.predicted_delay_min} min`;
-  els.detailBucket.textContent = flight.predicted_delay_bucket_label;
+  els.detailDelay.textContent = predictedDelayText(flight);
+  els.detailBucket.textContent = predictedDelayRange(flight);
   renderSuggestion(flight.controller_suggestion);
   renderList(els.reasonList, flight.reasons || []);
-  renderList(els.actionList, flight.recommended_actions || []);
   renderRiskFactors(flight.risk_factors || []);
-  renderProbBars(flight.probabilities || {});
+  renderProbBars(flight);
 }
 
 function closeDetailWindow() {

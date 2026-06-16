@@ -778,6 +778,22 @@ tbody tr.selected {
   gap: 8px;
 }
 
+.prob-row-predicted {
+  background: rgba(23, 105, 170, 0.06);
+  border-radius: 6px;
+  padding: 0 4px;
+  margin: 0 -4px;
+}
+
+.prob-predicted-marker {
+  display: inline-block;
+  margin-left: 5px;
+  color: var(--blue);
+  font-size: 10px;
+  vertical-align: middle;
+  line-height: 1;
+}
+
 .prob-row {
   display: grid;
   grid-template-columns: 82px minmax(120px, 1fr) 46px;

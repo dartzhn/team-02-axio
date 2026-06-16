@@ -68,6 +68,14 @@ BUCKET_COLS = [
     "prob_90plus_min",
 ]
 
+REG_BUCKET_COLS = [
+    "reg_prob_on_time",
+    "reg_prob_15_30_min",
+    "reg_prob_30_60_min",
+    "reg_prob_60_90_min",
+    "reg_prob_90plus_min",
+]
+
 RANDOM_STATE = 42
 N_BUCKETS = 5
 
@@ -170,6 +178,26 @@ def full_bucket_proba(model: Pipeline, X: pd.DataFrame) -> np.ndarray:
     for j, cls in enumerate(classes):
         full[:, int(cls)] = raw[:, j]
     return full
+
+
+def regression_bucket_proba(model: Pipeline, X: pd.DataFrame) -> np.ndarray:
+    """Convert per-tree regressor predictions into an empirical bucket distribution."""
+    transformed = model.named_steps["preprocess"].transform(X)
+    forest = model.named_steps["model"]
+    tree_log_preds = np.column_stack([
+        tree.predict(transformed)
+        for tree in forest.estimators_
+    ])
+    tree_min_preds = np.expm1(tree_log_preds).clip(min=0)
+    tree_buckets = np.zeros_like(tree_min_preds, dtype=int)
+    tree_buckets[tree_min_preds >= 15] = 1
+    tree_buckets[tree_min_preds >= 30] = 2
+    tree_buckets[tree_min_preds >= 60] = 3
+    tree_buckets[tree_min_preds >= 90] = 4
+    return np.stack(
+        [(tree_buckets == bucket).mean(axis=1) for bucket in range(N_BUCKETS)],
+        axis=1,
+    )
 
 
 def combine_risk_and_bucket_probs(
@@ -948,6 +976,7 @@ def main(argv: list[str] | None = None) -> int:
     bucket_probs = combine_risk_and_bucket_probs(delay_risk, raw_bucket_probs)
     pred_buckets = predict_hybrid_buckets(delay_risk, raw_bucket_probs, risk_threshold)
     pred_minutes = np.expm1(regression_model.predict(X_test)).clip(min=0)
+    reg_bucket_probs = regression_bucket_proba(regression_model, X_test)
 
     print("\n[7/8] Evaluation")
     print("\n  - Regression Metrics -")
@@ -1005,6 +1034,10 @@ def main(argv: list[str] | None = None) -> int:
         bucket_probs,
         columns=BUCKET_COLS,
     ).round(4).values
+    scored[REG_BUCKET_COLS] = pd.DataFrame(
+        reg_bucket_probs,
+        columns=REG_BUCKET_COLS,
+    ).round(4).values
     scored["actual_delay_bucket"] = y_test_buckets
     scored["risk_threshold_used"] = round(risk_threshold, 4)
 
@@ -1023,6 +1056,11 @@ def main(argv: list[str] | None = None) -> int:
         "delay_risk",
         "risk_threshold_used",
     ] + BUCKET_COLS + [
+        "reg_prob_on_time",
+        "reg_prob_15_30_min",
+        "reg_prob_30_60_min",
+        "reg_prob_60_90_min",
+        "reg_prob_90plus_min",
         "prev_arr_delay_min",
         "inbound_delay_after_buffer_min",
         "had_late_inbound",
