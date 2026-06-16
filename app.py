@@ -65,14 +65,140 @@ def minutes(value) -> int:
         return 0
 
 
+def as_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def recommend_action(row: dict) -> dict:
+    """Controller-facing recommendation rules, ordered by operational priority."""
+    inbound_after = as_float(row.get("inbound_delay_after_buffer_min"))
+    cascade_count = int(as_float(row.get("cascade_count")))
+    turnaround = as_float(row.get("turnaround_buffer_min"), default=9999.0)
+    weather_score = as_float(row.get("weather_severity_score"))
+    snow = as_float(row.get("snowfall_cm")) > 0
+    fog = int(as_float(row.get("is_fog_code"))) == 1
+    thunderstorm = int(as_float(row.get("is_thunderstorm_code"))) == 1
+    wind_gust_high = as_float(row.get("wind_gust_kmh")) >= 50
+    origin_delay_rate_recent = as_float(row.get("origin_recent_delay_rate"))
+    carrier_delay_rate_recent = as_float(row.get("carrier_recent_delay_rate"))
+    route_delay_rate_recent = as_float(row.get("route_recent_delay_rate"))
+    origin_hour_departure_count = as_float(row.get("departures_origin_hour"))
+    high_congestion_threshold = as_float(row.get("high_congestion_threshold"), default=0.0)
+    congestion_pctile = as_float(row.get("origin_hour_congestion_pctile"))
+    departure_hour = int(as_float(row.get("dep_hour")))
+    delay_risk_score = as_float(row.get("delay_risk")) * 100
+
+    moderate_driver_count = sum([
+        inbound_after > 0,
+        origin_delay_rate_recent >= 0.25,
+        carrier_delay_rate_recent >= 0.25,
+        route_delay_rate_recent >= 0.25,
+        congestion_pctile >= 0.75,
+        weather_score >= 2 or snow or fog or thunderstorm or wind_gust_high,
+        departure_hour >= 17,
+    ])
+
+    if inbound_after > 20 and cascade_count >= 2:
+        return {
+            "title": "Protect aircraft rotation",
+            "action": "Alert ops desk and downstream station, track inbound aircraft arrival, and prepare recovery options.",
+            "reason": "Inbound delay exceeds recovery buffer and aircraft has downstream flights.",
+            "escalation": "Escalate if aircraft has not landed 45 minutes before scheduled departure.",
+        }
+
+    if inbound_after > 0 and turnaround < 30:
+        return {
+            "title": "Trigger turnaround priority",
+            "action": "Pre-alert ramp, cleaning, fueling, catering and baggage teams before aircraft arrival.",
+            "reason": "Recovery buffer is too small to absorb inbound delay.",
+            "escalation": "Escalate if available turnaround time falls below minimum turnaround threshold.",
+        }
+
+    if weather_score >= 70 or snow or fog or thunderstorm or wind_gust_high:
+        return {
+            "title": "Activate weather disruption protocol",
+            "action": "Confirm de-icing or ramp limitations, monitor taxi/runway flow, and coordinate with weather or ATC desk.",
+            "reason": "Severe weather risk detected.",
+            "escalation": "Escalate if severe weather persists within the departure window.",
+        }
+
+    if origin_delay_rate_recent >= 0.35:
+        return {
+            "title": "Monitor origin flow restrictions",
+            "action": "Watch ATC restrictions, airport departure flow and close-in flights from this origin.",
+            "reason": "Recent departures from this airport show elevated delay pressure.",
+            "escalation": "Escalate if origin delay pressure remains high 60 minutes before departure.",
+        }
+
+    if carrier_delay_rate_recent >= 0.35:
+        return {
+            "title": "Check carrier recovery capacity",
+            "action": "Check aircraft and crew availability and protect priority flights.",
+            "reason": "Carrier's recent flights show elevated delay pressure.",
+            "escalation": "Escalate if carrier pressure combines with inbound or weather risk.",
+        }
+
+    if route_delay_rate_recent >= 0.35:
+        return {
+            "title": "Monitor route-specific disruption",
+            "action": "Check destination status, route flow and recent similar flights.",
+            "reason": "This origin-destination route has elevated recent delay risk.",
+            "escalation": "Escalate if route risk combines with weather or inbound aircraft delay.",
+        }
+
+    if (
+        high_congestion_threshold > 0
+        and origin_hour_departure_count >= high_congestion_threshold
+    ) or congestion_pctile >= 0.85:
+        return {
+            "title": "Secure pushback readiness",
+            "action": "Coordinate gate and ramp timing to keep the flight ready before slot pressure increases.",
+            "reason": "Flight departs during a congested origin-hour window.",
+            "escalation": "Escalate if readiness drops below threshold during peak departure bank.",
+        }
+
+    if departure_hour >= 17 and delay_risk_score >= 60:
+        return {
+            "title": "Prevent end-of-day stack-up",
+            "action": "Check rotation risk, crew legality exposure and last-leg connections earlier.",
+            "reason": "Evening flights have less recovery slack.",
+            "escalation": "Escalate severe-risk evening departures earlier.",
+        }
+
+    if moderate_driver_count >= 3:
+        return {
+            "title": "Place on active watchlist",
+            "action": "Refresh risk closer to departure and monitor inbound aircraft and gate readiness.",
+            "reason": "Multiple weak signals are accumulating without one dominant cause.",
+            "escalation": "Escalate only if another signal worsens.",
+        }
+
+    return {
+        "title": "Continue normal monitoring",
+        "action": "No immediate dispatcher action required.",
+        "reason": "No strong operational risk pattern detected.",
+        "escalation": "Reassess at next scheduled update.",
+    }
+
+
 def build_user_brief(row: dict) -> dict:
     impacts: list[str] = []
     actions: list[str] = []
     risk_factors: list[dict] = []
+    absorbed_inbound_factor = None
+    unknown_inbound_factor = None
 
     prev_arr = float(row.get("prev_arr_delay_min") or 0)
-    inbound_after = float(row.get("inbound_delay_after_buffer_min") or 0)
     turnaround = row.get("turnaround_buffer_min")
+    inbound_after_raw = row.get("inbound_delay_after_buffer_min")
+    inbound_after = float(inbound_after_raw or 0)
+    buffer_text = f"{minutes(turnaround)} min" if turnaround is not None else "unavailable"
+    carryover_text = f"{minutes(inbound_after)} min" if inbound_after_raw is not None else "unknown"
     tight_turnaround = int(row.get("tight_turnaround") or 0)
     snow = float(row.get("snowfall_cm") or 0)
     rain = float(row.get("precip_mm") or 0)
@@ -84,29 +210,47 @@ def build_user_brief(row: dict) -> dict:
     route_rate = float(row.get("route_recent_delay_rate") or 0)
     congestion = float(row.get("origin_hour_congestion_pctile") or 0)
     evening = int(row.get("is_evening_bank") or 0)
+    missing_buffer = turnaround is None or inbound_after_raw is None
 
-    if prev_arr >= 30:
-        impacts.append(
-            "The departure is exposed to a cascade delay because the aircraft may reach the gate late."
-        )
-        actions.append("Check whether an aircraft swap or reserve crew can protect the departure.")
-        risk_factors.append({
+    if prev_arr >= 15:
+        inbound_factor = {
             "label": "Inbound aircraft",
-            "value": f"{minutes(prev_arr)} min late",
-            "level": "High",
-            "detail": "A late aircraft can carry delay into this departure.",
-        })
-    elif prev_arr >= 15:
-        impacts.append(
-            "The flight may lose boarding and pushback buffer if the inbound aircraft slips further."
-        )
-        actions.append("Monitor inbound arrival and alert the gate team.")
-        risk_factors.append({
-            "label": "Inbound aircraft",
-            "value": f"{minutes(prev_arr)} min late",
-            "level": "Medium",
-            "detail": "The inbound leg is already behind schedule.",
-        })
+            "value": f"Prev leg {minutes(prev_arr)} min late",
+            "level": "High" if prev_arr >= 30 or inbound_after >= 15 else "Medium",
+            "detail": "Buffer is the scheduled ground time available before this flight departs.",
+            "metrics": [
+                {"label": "Previous leg", "value": f"{minutes(prev_arr)} min late"},
+                {"label": "Buffer", "value": buffer_text},
+                {"label": "Carry-over", "value": carryover_text},
+            ],
+        }
+
+        if turnaround is not None and inbound_after_raw is not None and inbound_after <= 0:
+            absorbed_inbound_factor = {
+                **inbound_factor,
+                "value": "Absorbed by buffer",
+                "level": "Low",
+                "detail": "The previous leg was late, but scheduled ground time is larger than that delay.",
+            }
+        elif missing_buffer:
+            unknown_inbound_factor = {
+                **inbound_factor,
+                "value": "Buffer unavailable",
+                "level": "Low",
+                "detail": "The previous leg was late, but the dataset does not provide a reliable buffer, so carry-over cannot be confirmed.",
+            }
+        elif inbound_after >= 15:
+            impacts.append(
+                "The departure is exposed to a cascade delay because the aircraft may reach the gate late."
+            )
+            actions.append("Check whether an aircraft swap or reserve crew can protect the departure.")
+            risk_factors.append(inbound_factor)
+        else:
+            impacts.append(
+                "The flight may lose boarding and pushback buffer if the inbound aircraft slips further."
+            )
+            actions.append("Monitor inbound arrival and alert the gate team.")
+            risk_factors.append(inbound_factor)
 
     if inbound_after >= 15:
         impacts.append(
@@ -208,6 +352,18 @@ def build_user_brief(row: dict) -> dict:
             "detail": "This origin-destination pair has recent delay history.",
         })
 
+    if absorbed_inbound_factor:
+        impacts.append(
+            "The previous-leg delay appears covered by scheduled ground time; remaining risk is driven more by airport, route, carrier, or timing pressure."
+        )
+        risk_factors.append(absorbed_inbound_factor)
+
+    if unknown_inbound_factor:
+        impacts.append(
+            "The previous leg was late, but buffer is unavailable, so it is a watch item rather than a confirmed carry-over delay."
+        )
+        risk_factors.append(unknown_inbound_factor)
+
     if not impacts:
         impacts.append(
             "No single driver dominates; the risk comes from several smaller schedule and operating signals."
@@ -230,6 +386,7 @@ def build_user_brief(row: dict) -> dict:
         "main_reason": main_reason,
         "reasons": list(dict.fromkeys(impacts))[:5],
         "recommended_actions": list(dict.fromkeys(actions))[:4],
+        "controller_suggestion": recommend_action(row),
         "risk_factors": risk_factors[:6],
     }
 

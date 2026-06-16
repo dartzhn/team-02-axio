@@ -36,6 +36,9 @@ const els = {
   clearFilters: document.querySelector("#clearFilters"),
   busyOverlay: document.querySelector("#busyOverlay"),
   toast: document.querySelector("#toast"),
+  detailBackdrop: document.querySelector("#detailBackdrop"),
+  closeDetail: document.querySelector("#closeDetail"),
+  detailPanel: document.querySelector(".detail-panel"),
   emptyDetail: document.querySelector("#emptyDetail"),
   flightDetail: document.querySelector("#flightDetail"),
   detailRiskBadge: document.querySelector("#detailRiskBadge"),
@@ -45,6 +48,10 @@ const els = {
   detailTime: document.querySelector("#detailTime"),
   detailDelay: document.querySelector("#detailDelay"),
   detailBucket: document.querySelector("#detailBucket"),
+  suggestionTitle: document.querySelector("#suggestionTitle"),
+  suggestionAction: document.querySelector("#suggestionAction"),
+  suggestionReason: document.querySelector("#suggestionReason"),
+  suggestionEscalation: document.querySelector("#suggestionEscalation"),
   reasonList: document.querySelector("#reasonList"),
   actionList: document.querySelector("#actionList"),
   riskFactorList: document.querySelector("#riskFactorList"),
@@ -121,6 +128,8 @@ function resetDashboard() {
   els.emptyDetail.textContent = "Upload and run a CSV to review flight risk briefs.";
   els.emptyDetail.classList.remove("hidden");
   els.flightDetail.classList.add("hidden");
+  els.detailPanel.classList.add("hidden");
+  els.detailBackdrop.classList.add("hidden");
   fillSelect(els.originSelect, [], "origins");
   fillSelect(els.carrierSelect, [], "carriers");
   fillSelect(els.destSelect, [], "destinations");
@@ -149,11 +158,8 @@ function applyFilters() {
   });
 
   state.filtered.sort((a, b) => b.delay_risk - a.delay_risk);
-  if (!state.selectedId && state.filtered.length) {
-    state.selectedId = state.filtered[0].flight_id;
-  }
   if (state.selectedId && !state.filtered.some((f) => f.flight_id === state.selectedId)) {
-    state.selectedId = state.filtered[0]?.flight_id ?? null;
+    closeDetailWindow();
   }
   renderTable();
   renderDetail();
@@ -211,26 +217,51 @@ function renderRiskFactors(items) {
       <div>
         <strong>${factor.label}</strong>
         <span>${factor.detail}</span>
+        ${factor.metrics ? `
+          <div class="factor-metrics">
+            ${factor.metrics.map((metric) => `
+              <span class="factor-metric">
+                <small>${metric.label}</small>
+                <b>${metric.value}</b>
+              </span>
+            `).join("")}
+          </div>
+        ` : ""}
       </div>
       <em>${factor.value}</em>
     </div>
   `).join("");
 }
 
+function renderSuggestion(suggestion) {
+  const safeSuggestion = suggestion || {
+    title: "Continue normal monitoring",
+    action: "No immediate dispatcher action required.",
+    reason: "No strong operational risk pattern detected.",
+    escalation: "Reassess at next scheduled update.",
+  };
+  els.suggestionTitle.textContent = safeSuggestion.title;
+  els.suggestionAction.textContent = safeSuggestion.action;
+  els.suggestionReason.textContent = safeSuggestion.reason;
+  els.suggestionEscalation.textContent = safeSuggestion.escalation;
+}
+
 function renderProbBars(probabilities) {
   const rows = [
-    ["On time", probabilities.on_time],
-    ["15-30", probabilities.delay_15_30],
-    ["30-60", probabilities.delay_30_60],
-    ["60-90", probabilities.delay_60_90],
-    ["90+", probabilities.delay_90_plus],
+    ["On time", probabilities.on_time, "on-time"],
+    ["15-30", probabilities.delay_15_30, "short"],
+    ["30-60", probabilities.delay_30_60, "medium"],
+    ["60-90", probabilities.delay_60_90, "long"],
+    ["90+", probabilities.delay_90_plus, "severe"],
   ];
-  els.probBars.innerHTML = rows.map(([label, value]) => {
+  els.probBars.innerHTML = rows.map(([label, value, tone]) => {
     const width = Math.max(0, Math.min(100, Math.round((Number(value) || 0) * 100)));
     return `
       <div class="prob-row">
         <span class="prob-label">${label}</span>
-        <span class="prob-track"><span class="prob-fill" style="width:${width}%"></span></span>
+        <span class="prob-track" aria-label="${label} probability ${width}%">
+          <span class="prob-fill prob-${tone}" style="width:${width}%"></span>
+        </span>
         <span class="prob-value">${width}%</span>
       </div>
     `;
@@ -239,9 +270,18 @@ function renderProbBars(probabilities) {
 
 function renderDetail() {
   const flight = state.flights.find((item) => item.flight_id === state.selectedId);
-  els.emptyDetail.classList.toggle("hidden", Boolean(flight));
-  els.flightDetail.classList.toggle("hidden", !flight);
-  if (!flight) return;
+  if (!flight) {
+    els.detailPanel.classList.add("hidden");
+    els.detailBackdrop.classList.add("hidden");
+    els.emptyDetail.classList.remove("hidden");
+    els.flightDetail.classList.add("hidden");
+    return;
+  }
+
+  els.detailPanel.classList.remove("hidden");
+  els.detailBackdrop.classList.remove("hidden");
+  els.emptyDetail.classList.add("hidden");
+  els.flightDetail.classList.remove("hidden");
 
   els.detailRiskBadge.textContent = flight.risk_level;
   els.detailRiskBadge.className = `risk-badge ${riskClass(flight.risk_level)}`;
@@ -251,10 +291,17 @@ function renderDetail() {
   els.detailTime.textContent = flight.sched_dep_local ?? "-";
   els.detailDelay.textContent = `${flight.predicted_delay_min} min`;
   els.detailBucket.textContent = flight.predicted_delay_bucket_label;
+  renderSuggestion(flight.controller_suggestion);
   renderList(els.reasonList, flight.reasons || []);
   renderList(els.actionList, flight.recommended_actions || []);
   renderRiskFactors(flight.risk_factors || []);
   renderProbBars(flight.probabilities || {});
+}
+
+function closeDetailWindow() {
+  state.selectedId = null;
+  renderTable();
+  renderDetail();
 }
 
 async function loadResults() {
@@ -323,6 +370,14 @@ function bindEvents() {
     state.selectedId = row.dataset.flightId;
     renderTable();
     renderDetail();
+  });
+
+  els.closeDetail.addEventListener("click", closeDetailWindow);
+  els.detailBackdrop.addEventListener("click", closeDetailWindow);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.selectedId) {
+      closeDetailWindow();
+    }
   });
 
   els.searchInput.addEventListener("input", (event) => {

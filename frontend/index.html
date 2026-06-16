@@ -4,14 +4,15 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Flight Delay Ops Dashboard</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=3" />
+    <link rel="icon" type="image/png" href="/assets/axio-icon.png?v=1" />
+    <link rel="stylesheet" href="/assets/styles.css?v=8" />
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
         <div class="brand">
-          <div class="brand-mark" aria-hidden="true">FD</div>
-          <div>
+          <img class="brand-logo" src="/assets/axio-logo.png?v=1" alt="AXIO Precision Decisions" />
+          <div class="brand-copy">
             <h1>Flight Delay Control</h1>
             <p id="statusLine">Loading scored flights...</p>
           </div>
@@ -129,7 +130,9 @@
             </div>
           </section>
 
-          <aside class="detail-panel" aria-label="Selected flight">
+          <div id="detailBackdrop" class="detail-backdrop hidden"></div>
+
+          <aside class="detail-panel hidden" aria-label="Selected flight" role="dialog" aria-modal="true">
             <div id="emptyDetail" class="empty-state">
               Select a flight to review the risk brief.
             </div>
@@ -141,9 +144,14 @@
                   <h2 id="detailFlight">-</h2>
                   <p id="detailRoute">-</p>
                 </div>
-                <div class="risk-meter">
-                  <strong id="detailRisk">-</strong>
-                  <span>delay risk</span>
+                <div class="detail-head-actions">
+                  <div class="risk-meter">
+                    <strong id="detailRisk">-</strong>
+                    <span>delay risk</span>
+                  </div>
+                  <button id="closeDetail" class="tool-button close-button" type="button" title="Close flight window">
+                    <span aria-hidden="true">×</span>
+                  </button>
                 </div>
               </div>
 
@@ -161,6 +169,27 @@
                   <strong id="detailBucket">-</strong>
                 </div>
               </div>
+
+              <section class="suggestion-card">
+                <div class="suggestion-topline">
+                  <span>Controller Suggestion</span>
+                  <strong id="suggestionTitle">-</strong>
+                </div>
+                <div class="suggestion-grid">
+                  <div>
+                    <span>Action</span>
+                    <p id="suggestionAction">-</p>
+                  </div>
+                  <div>
+                    <span>Reason</span>
+                    <p id="suggestionReason">-</p>
+                  </div>
+                  <div>
+                    <span>Escalation</span>
+                    <p id="suggestionEscalation">-</p>
+                  </div>
+                </div>
+              </section>
 
               <section class="brief-section">
                 <h3>Risk Basis</h3>
@@ -197,6 +226,6 @@
 
     <div id="toast" class="toast hidden" role="status"></div>
 
-    <script src="/assets/app.js?v=3"></script>
+    <script src="/assets/app.js?v=6"></script>
   </body>
 </html>
