@@ -2,6 +2,10 @@
 
 Local operations dashboard for the DATAbility flight-delay project.
 
+team number 2, team name 1+16, Alizhan Askarov, Georgiy Klevanov, Christian Nagl, Negar
+Datability
+solution: Random Forest Regressor
+
 ## What Is Included
 
 - `app.py` - local Python server and API.
