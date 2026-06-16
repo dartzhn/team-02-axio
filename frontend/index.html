@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Flight Delay Ops Dashboard</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=3" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">FD</div>
+          <div>
+            <h1>Flight Delay Control</h1>
+            <p id="statusLine">Loading scored flights...</p>
+          </div>
+        </div>
+
+        <div class="top-actions">
+          <label class="file-button" for="csvInput">
+            <span class="icon" aria-hidden="true">+</span>
+            <span>CSV</span>
+          </label>
+          <input id="csvInput" type="file" accept=".csv,text/csv" />
+          <button id="runButton" class="primary-button" type="button">
+            <span class="icon" aria-hidden="true">▶</span>
+            <span>Run</span>
+          </button>
+          <button id="refreshButton" class="tool-button" type="button" title="Refresh results">
+            <span aria-hidden="true">↻</span>
+          </button>
+          <button id="downloadButton" class="tool-button" type="button" title="Download scored CSV">
+            <span aria-hidden="true">⇩</span>
+          </button>
+        </div>
+      </header>
+
+      <main>
+        <section class="summary-grid" aria-label="Operational summary">
+          <article class="summary-card">
+            <span class="summary-label">Flights</span>
+            <strong id="totalFlights">-</strong>
+            <span class="summary-note">in current scored set</span>
+          </article>
+          <article class="summary-card high">
+            <span class="summary-label">High Risk</span>
+            <strong id="highRiskFlights">-</strong>
+            <span class="summary-note">needs controller review</span>
+          </article>
+          <article class="summary-card medium">
+            <span class="summary-label">Watchlist</span>
+            <strong id="mediumRiskFlights">-</strong>
+            <span class="summary-note">monitor before pushback</span>
+          </article>
+          <article class="summary-card">
+            <span class="summary-label">Avg Delay</span>
+            <strong id="avgDelay">-</strong>
+            <span class="summary-note">predicted minutes</span>
+          </article>
+          <article class="summary-card route">
+            <span class="summary-label">Top Route</span>
+            <strong id="topRoute">-</strong>
+            <span class="summary-note">highest current risk</span>
+          </article>
+        </section>
+
+        <section class="workspace">
+          <aside class="filters-panel" aria-label="Filters">
+            <div class="panel-title">
+              <h2>Filters</h2>
+              <button id="clearFilters" class="text-button" type="button">Clear</button>
+            </div>
+
+            <label class="field-label" for="searchInput">Search</label>
+            <input id="searchInput" class="input" type="search" placeholder="Flight, route, carrier" />
+
+            <label class="field-label">Risk</label>
+            <div class="segmented" role="group" aria-label="Risk filter">
+              <button class="segment active" type="button" data-risk="All">All</button>
+              <button class="segment" type="button" data-risk="High">High</button>
+              <button class="segment" type="button" data-risk="Medium">Medium</button>
+              <button class="segment" type="button" data-risk="Low">Low</button>
+            </div>
+
+            <label class="field-label" for="originSelect">Origin</label>
+            <select id="originSelect" class="input"></select>
+
+            <label class="field-label" for="carrierSelect">Carrier</label>
+            <select id="carrierSelect" class="input"></select>
+
+            <label class="field-label" for="destSelect">Destination</label>
+            <select id="destSelect" class="input"></select>
+
+            <label class="field-label" for="hourRange">Depart before</label>
+            <div class="range-row">
+              <input id="hourRange" type="range" min="0" max="23" value="23" />
+              <span id="hourValue">23:59</span>
+            </div>
+          </aside>
+
+          <section class="table-panel" aria-label="Flight risk table">
+            <div class="table-header">
+              <div>
+                <h2>Risk Queue</h2>
+                <p id="resultCount">-</p>
+              </div>
+              <div class="legend">
+                <span><i class="dot high-dot"></i>High</span>
+                <span><i class="dot medium-dot"></i>Medium</span>
+                <span><i class="dot low-dot"></i>Low</span>
+              </div>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Flight</th>
+                    <th>Route</th>
+                    <th>Time</th>
+                    <th>Risk</th>
+                    <th>Delay</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody id="flightRows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <aside class="detail-panel" aria-label="Selected flight">
+            <div id="emptyDetail" class="empty-state">
+              Select a flight to review the risk brief.
+            </div>
+
+            <div id="flightDetail" class="flight-detail hidden">
+              <div class="detail-head">
+                <div>
+                  <span id="detailRiskBadge" class="risk-badge">-</span>
+                  <h2 id="detailFlight">-</h2>
+                  <p id="detailRoute">-</p>
+                </div>
+                <div class="risk-meter">
+                  <strong id="detailRisk">-</strong>
+                  <span>delay risk</span>
+                </div>
+              </div>
+
+              <div class="detail-stats">
+                <div>
+                  <span>Departure</span>
+                  <strong id="detailTime">-</strong>
+                </div>
+                <div>
+                  <span>Predicted delay</span>
+                  <strong id="detailDelay">-</strong>
+                </div>
+                <div>
+                  <span>Delay range</span>
+                  <strong id="detailBucket">-</strong>
+                </div>
+              </div>
+
+              <section class="brief-section">
+                <h3>Risk Basis</h3>
+                <div id="riskFactorList" class="risk-factor-list"></div>
+              </section>
+
+              <section class="brief-section">
+                <h3>Why It Matters</h3>
+                <ul id="reasonList"></ul>
+              </section>
+
+              <section class="brief-section">
+                <h3>Controller Actions</h3>
+                <ul id="actionList"></ul>
+              </section>
+
+              <section class="brief-section">
+                <h3>Risk Split</h3>
+                <div id="probBars" class="prob-bars"></div>
+              </section>
+            </div>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <div id="busyOverlay" class="busy-overlay hidden">
+      <div class="busy-box">
+        <div class="spinner"></div>
+        <strong>Analyzing flights...</strong>
+        <span>This can take about 30 seconds.</span>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden" role="status"></div>
+
+    <script src="/assets/app.js?v=3"></script>
+  </body>
+</html>
